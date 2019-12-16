@@ -57,7 +57,6 @@ debug_script = True
 
 # make it easy to debug in one line
 def debug_w3(log, pretty=False):
-    print("Debug printing...")
     if debug_script:
         if not pretty:
             print(log)
