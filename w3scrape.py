@@ -946,7 +946,7 @@ if len(pages_to_download) > 0:
             conf_page_link = ""
             try:
                 conf_page_id_value = confluence_page_mapping[p['page_id']]['conf_page_id']
-                conf_page_link = "<a href='{}display/CEST/{}' target='_blank'>{}</a>".format(conf_endpoint, p['title'], conf_page_id_str)
+                conf_page_link = "<a href='{}display/{}/{}' target='_blank'>{}</a>".format(conf_endpoint, conf_space_name, p['title'], conf_page_id_str)
             except:
                 pass
 
