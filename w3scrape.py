@@ -660,7 +660,7 @@ for i, page in enumerate(pages_to_download):
               <ac:structured-macro ac:name="toc" ac:schema-version="1"/>
             </p>""", 'html.parser')
 
-            for toc in soup.find_all('div', attrs={'name': 'intInfo', 'contenteditable': 'false'}):
+            for toc in soup.find_all('div', attrs={'name': 'intInfo'}):
                 found_toc_in_loop = False
                 for i, strs in enumerate(toc.stripped_strings):
                     # the string 'Table of Contents:' should be the first stripped string if it's a W3 TOC
