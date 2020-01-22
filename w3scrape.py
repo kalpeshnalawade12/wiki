@@ -682,6 +682,7 @@ for i, page in enumerate(pages_to_download):
     images_found_to_replace = 0
     links_found_to_replace = 0
     wiki_links_found_to_replace = 0
+    old_wiki_links_found_to_replace = 0
     connection_links_found_to_replace = 0
 
     # only try to get attachments if they exist for a page id
@@ -744,6 +745,21 @@ for i, page in enumerate(pages_to_download):
             wiki_link_soup_to_append = BeautifulSoup(reformatted_link, 'html.parser')
             link_src.replace_with(wiki_link_soup_to_append)
             logger.info("-- Wiki link formatted to Confluence markup in HTML: {}".format(href_of_link))
+
+    if sync_to_confluence and replace_w3_wiki_links:
+        for link_src in soup.find_all('a', attrs={"wiki": True, "page": True}):
+            if link_src['wiki'] == w3_wiki_id:
+                href_of_link = link_src['page']
+                a_link_text = link_src.text
+                old_wiki_links_found_to_replace += 1
+                attachments_formatted.append(conf_page_id)
+                reformatted_link = """<ac:link>
+                      <ri:page ri:content-title="{}"/>
+                      <ac:plain-text-link-body><![CDATA[{}]]></ac:plain-text-link-body>
+                    </ac:link>""".format(href_of_link, a_link_text)
+                wiki_link_soup_to_append = BeautifulSoup(reformatted_link, 'html.parser')
+                link_src.replace_with(wiki_link_soup_to_append)
+                logger.info("-- Older Wiki link formatted to Confluence markup in HTML: {}".format(href_of_link))
 
     if sync_to_confluence and replace_connections_files:
         logger.info("Looking for linked connection files to download")
@@ -847,7 +863,8 @@ for i, page in enumerate(pages_to_download):
             possible_link_issues[page['page_id']] = link_issues_data
 
     if images_found_to_replace > 0 or links_found_to_replace > 0 \
-            or wiki_links_found_to_replace > 0 or connection_links_found_to_replace > 0:
+            or wiki_links_found_to_replace > 0 or connection_links_found_to_replace > 0 \
+            or old_wiki_links_found_to_replace > 0:
         logger.info("Updating confluence page with image/link sources")
         confluence.update_page(conf_page_id, page['title'], soup.prettify())
 
