@@ -511,7 +511,7 @@ for i, x in enumerate(pages_to_download):
 logger.info("Searched {} pages for attachments, {} pages with attachments".format(number_of_pages_to_download,
                                                                                   len(attachments_to_download)))
 
-if sync_to_confluence:
+if sync_to_confluence and append_wiki_comments:
     logger.info("#" * 20)
     logger.info("Looking for comments on pages")
     logger.info("#" * 20)
@@ -664,7 +664,7 @@ for i, page in enumerate(pages_to_download):
                 found_toc_in_loop = False
                 for i, strs in enumerate(toc.stripped_strings):
                     # the string 'Table of Contents:' should be the first stripped string if it's a W3 TOC
-                    if i == 0 and strs == 'Table of Contents:':
+                    if strs == 'Table of Contents:':
                         logger.info("Replacing W3 Table of Contents")
                         found_toc_in_loop = True
                 if found_toc_in_loop:
