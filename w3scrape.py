@@ -1,12 +1,10 @@
 """
 Author: Daniel Seidner
 Purpose: Backup a W3 Wiki to Confluence
-Note: Review this blog post before executing:
-    https://confluence.acoustic.co/display/~daniel.seidner@acoustic.co/2019/12/30/Migrating+from+W3+Wikis+to+Confluence+Spaces
+Note: Review this page before executing:
+    https://confluence.acoustic.co/display/AWORK/Migration+Script
 
-API References:
-    1) Connections API: https://www-10.lotus.com/ldd/lcwiki.nsf/xpAPIViewer.xsp?lookupName=IBM+Connections+6.0+API+Documentation#action=openDocument&res_title=Working_with_wiki_pages_ic60&content=apicontent
-    2) Confluence API: https://docs.atlassian.com/ConfluenceServer/rest/7.2.0/
+API References: https://confluence.acoustic.co/display/AWORK/Script+API+Documentation
 
 Requirements:
     Tested in Python 3.7+
@@ -18,7 +16,6 @@ Requirements:
 """
 
 import requests
-# from pycookiecheat import chrome_cookies
 import browser_cookie3
 import xmltodict
 from atlassian import Confluence
@@ -32,16 +29,21 @@ import os
 from urllib.parse import urlparse
 import unicodedata
 import logging
+import re
 
-# the wiki id, make sure this isn't the community id... get it from the wiki site
-w3_wiki_id = 'Wee8e77102d31_4b60_9453_76f36e281a43'
+# require user input for wiki url and space key
+w3_wiki_url = input("Please paste the IBM URL to your wiki (not your community) and hit enter: ")
+conf_space_name = input("Please type your Confluence space key (should be a few upper-case letters) and hit enter: ")
+
+# URL for your Wiki, NOT the Community (go to the dropdown that says "Overview" and choose Wiki)
+# w3_wiki_url = "https://w3-connections.ibm.com/wikis/home?lang=en-us#!/wiki/Wee8e77102d31_4b60_9453_76f36e281a43"
+# Space key in Confluence, should just be a couple of letters all upper-case
+# conf_space_name = 'CEST'
+
 # number of pages metadata to bring back from W3 index at once | max is 500
 w3_number_of_pages = 100
 # set to true if you only want to get the first w3_number_of_pages pages for testing
 stop_after_first_index_scan = False
-# The base URL of the W3 wiki host
-w3_host = 'https://w3-connections.ibm.com'
-
 # Do you want to sync the data from W3 to Confluence?
 # Set to False if you just want local backup
 sync_to_confluence = True
@@ -49,9 +51,8 @@ sync_to_confluence = True
 # Or create a new home page where this wiki backup will exist?
 use_existing_conf_home_page = False
 
-conf_endpoint = "https://conftest.acoustic.co/"
-# conf_endpoint = 'https://confluence.acoustic.co/'
-conf_space_name = 'CEST'
+# conf_endpoint = "https://conftest.acoustic.co/"
+conf_endpoint = 'https://confluence.acoustic.co/'
 conf_max_attachment_size = 104857600
 
 # The following settings are only in effect if sync_to_confluence is True
@@ -83,6 +84,50 @@ fh.setFormatter(file_logger_format)
 ch.setFormatter(file_logger_format)
 logger.addHandler(fh)
 logger.addHandler(ch)
+
+logger.debug("User entered this as Wiki URL: {}".format(w3_wiki_url))
+logger.debug("User entered this as their Confluence space key: {}".format(conf_space_name))
+
+example_w3_wiki_url = 'https://w3-connections.ibm.com/wikis/home?lang=en-us#!/wiki/Wee8e77102d31_4b60_9453_76f36e281a43'
+
+logger.debug("Parsed wiki URL: \n{}".format(urlparse(w3_wiki_url)))
+
+if len(urlparse(w3_wiki_url).scheme) == 0 or urlparse(w3_wiki_url).netloc == 0:
+    logger.info("Make sure to use a Wiki URL! It should look like this: \n{}".format(example_w3_wiki_url))
+    raise SystemExit
+
+w3_host = "{}://{}".format(
+    urlparse(w3_wiki_url).scheme
+    , urlparse(w3_wiki_url).netloc)
+logger.info("Using '{}' as W3 Host".format(w3_host))
+
+wiki_fragment = urlparse(w3_wiki_url).fragment
+
+if len(wiki_fragment) == 0:
+    if '/communities/' in urlparse(w3_wiki_url).path:
+        logger.info("Don't use the URL for the Community! Click into the Wiki from the dropdown that says "
+                    "'Overview' to get the Wiki URL. It should look like this: {}"
+                    .format(example_w3_wiki_url))
+        raise SystemExit
+    else:
+        logger.info("Couldn't find the wiki id. Make sure you paste a URL like this to the w3_wiki_url:\n{}"
+              .format(example_w3_wiki_url))
+        raise SystemExit
+
+if '!/wiki/' in wiki_fragment:
+    start_delim = '!/wiki/'
+    end_delim = '/'
+    start = wiki_fragment.rindex(start_delim) + len(start_delim)
+    # handle if someone pastes w3 url that includes a page
+    if end_delim in wiki_fragment[start:]:
+        end = wiki_fragment.index(end_delim, start)
+        w3_wiki_id = wiki_fragment[start:end]
+    else:
+        w3_wiki_id = wiki_fragment[start:]
+    logger.info("Found wiki id: {}".format(w3_wiki_id))
+else:
+    logger.info("Wiki ID not found. Make sure you paste a URL like this to the w3_wiki_url {}".format(example_w3_wiki_url))
+    raise SystemExit
 
 
 class XmlWorker:
@@ -134,9 +179,11 @@ class WikiWorker:
 
     def get_next_feed_page(self, feed_json):
         next_feed_page = None
-        for link in feed_json['feed']['link']:
-            if link['@rel'] == 'next':
-                next_feed_page = link['@href']
+        feed_link_type = feed_json['feed']['link']
+        if feed_link_type is list:
+            for link in feed_json['feed']['link']:
+                if link['@rel'] == 'next':
+                    next_feed_page = link['@href']
         return next_feed_page
 
     def add_wiki_feed_pages(self, page_items):
@@ -165,18 +212,22 @@ alert_items = []
 # Capture entire process start time
 startSyncTime = datetime.now()
 
-# get cookies from your own Chrome, make sure you are currently logged in to W3!
-# cookies = chrome_cookies(w3_host)
+# get cookies for all domains that include ibm or collabserv
+if 'collabserv' in urlparse(w3_wiki_url).netloc:
+    d_name = 'apps.na.collabserv.com'
+else:
+    d_name = 'ibm.com'
 
-# get cookies for all domains that include ibm
-ibm_cookies = browser_cookie3.chrome(domain_name='ibm.com')
+ibm_cookies = browser_cookie3.chrome(domain_name=d_name)
 
 cookies = {}
 
 for co in ibm_cookies:
-    # W3 connections needs cookies from these two domains
-    if co.domain in ['.ibm.com', 'w3-connections.ibm.com']:
+    # W3 connections needs cookies from these domains
+    if co.domain in ['.ibm.com', 'w3-connections.ibm.com', 'apps.na.collabserv.com']:
         cookies[co.name] = co.value
+
+logger.debug(cookies)
 
 # need to present a user-agent for W3 to accept your visit
 headers = {
@@ -195,6 +246,8 @@ except Exception as e:
     logger.error("Unable to get the wiki, make sure you're on AnyConnect\nError: {}".format(e), exc_info=True)
     raise SystemExit
 
+logger.debug(wiki_feed)
+
 # start parsing the W3 index and get additional ids needed
 xml_wiki_index = XmlWorker(wiki_feed)
 logger.info("Trying to parse XML for Wiki Index")
@@ -206,11 +259,40 @@ except Exception as e:
     raise SystemExit
 
 # get the wiki label used in other API calls
+logger.debug(json.dumps(items))
 wiki_second_id = xml_wiki_index.getWikiSecondId(items)
 logger.info("Found secondary/label W3 ID: " + wiki_second_id)
 
 # add the initial load of entries
 wiki_meta.add_wiki_feed_pages(items['feed']['entry'])
+
+if sync_to_confluence:
+    # make sure you're logged into Confluence
+    conf_cookies = requests.utils.dict_from_cookiejar(
+        browser_cookie3.chrome(
+            domain_name=urlparse(conf_endpoint).hostname)
+    )
+    # conf_cookies = chrome_cookies(conf_endpoint)
+    logger.info("Trying to login to Confluence and get space details")
+    confluence = Confluence(
+        url=conf_endpoint,
+        cookies=conf_cookies)
+
+    space_details = confluence.get_space(conf_space_name)
+    logger.debug(space_details)
+    if 'HTTP Status 401' in space_details:
+        logger.info("ERROR: Login incorrect, you are not authorized. Verify your credentials!")
+        logger.debug(space_details)
+        raise SystemExit
+
+    if 'statusCode' in space_details:
+        if space_details['statusCode'] == 404:
+            logger.info("ERROR: Unable to to get Confluence space details. Reason... {}".format(space_details['message']))
+            raise SystemExit
+    else:
+        conf_space_title = space_details['name']
+        conf_space_id = space_details['id']
+        logger.info("Found Confluence space named '{}' with ID {}".format(conf_space_title, conf_space_id))
 
 # determine how many pages are from the index
 try:
@@ -353,6 +435,8 @@ def create_conf_page(title, body, parent_id=None):
             else:
                 # get the body printed in case there's an error parsing xhtml
                 logger.debug(pprint.pformat(body))
+            if 'Error parsing' in page_create['message']:
+                logger.info("Confluence XHTML parser didn't like this code, check the logs")
             return 0
     except Exception as e:
         logger.error("ERROR: Could not create page: {}".format(e), exc_info=True)
@@ -384,23 +468,6 @@ existing_conf_pages = []
 
 homepage_id = None
 if sync_to_confluence:
-    # make sure you're logged into Confluence
-    conf_cookies = requests.utils.dict_from_cookiejar(
-        browser_cookie3.chrome(
-            domain_name=urlparse(conf_endpoint).hostname)
-    )
-    # conf_cookies = chrome_cookies(conf_endpoint)
-    logger.info("Trying to login to Confluence and get space details")
-    confluence = Confluence(
-        url=conf_endpoint,
-        cookies=conf_cookies)
-
-    space_details = confluence.get_space(conf_space_name)
-    if 'HTTP Status 401' in space_details:
-        logger.info("ERROR: Login incorrect, you are not authorized. Verify your credentials!")
-        logger.debug(space_details)
-        raise SystemExit
-
     logger.info("Getting existing page titles from Confluence space")
 
 
@@ -444,7 +511,11 @@ if sync_to_confluence:
         if use_existing_conf_home_page:
             homepage_id = space_details['homepage']['id']
         else:
-            homepage_id = create_conf_page('W3 Backup of {}'.format(wiki_title),
+            conf_home_page_title = 'W3 Backup of {}'.format(wiki_title)
+            if conf_home_page_title in existing_conf_pages:
+                logger.info("ERROR: Delete the page in Confluence named '{}' to use these script settings".format(conf_home_page_title))
+                raise SystemExit
+            homepage_id = create_conf_page(conf_home_page_title,
                                            'This is the <b>parent</b> page of the wiki backup. Feel free to delete/modify as you see fit!')
         logger.info("Confluence Homepage ID is {}".format(homepage_id))
     except Exception as e:
@@ -596,8 +667,13 @@ for i, page in enumerate(pages_to_download):
         # need to remove some items that cause fits for Confluence xhtml parser
         for meta in soup.find_all('meta'):
             meta.decompose()
-        for v in soup.find_all('v:rect'):
-            v.decompose()
+        for colon in soup.find_all(re.compile(":")):
+            # i've seen <v:rect> and <o:p> tags in W3 and Confluence hates them
+            # so let's just remove any tag that contains a colon because that means it's not valid HTML
+            # we'll add tags with colons later, but those are Confluence macros that they understand as valid
+            # https://developer.mozilla.org/en-US/docs/Web/HTML/Element
+            logger.info("Removing this code because the tag contains a colon: \n{}".format(colon.prettify()))
+            colon.decompose()
 
         if append_w3_history_table:
             w3_stats_info = [page['author'], page['created'], page['modifier'], page['modified'], page['link']]
@@ -663,13 +739,13 @@ for i, page in enumerate(pages_to_download):
             for toc in soup.find_all('div', attrs={'name': 'intInfo'}):
                 found_toc_in_loop = False
                 for i, strs in enumerate(toc.stripped_strings):
-                    # the string 'Table of Contents:' should be the first stripped string if it's a W3 TOC
+                    # the string 'Table of Contents:' should be one of the stripped strings if it's a W3 TOC
                     if strs == 'Table of Contents:':
-                        logger.info("Replacing W3 Table of Contents")
                         found_toc_in_loop = True
                 if found_toc_in_loop:
                     # need to replace after the stripped strings loop because we get an error otherwise
                     # since we'd be replacing soup that is still being parsed
+                    logger.info("Replacing W3 Table of Contents")
                     toc.replace_with(soup_toc_to_append)
 
         logger.debug(soup.prettify())
@@ -839,8 +915,8 @@ for i, page in enumerate(pages_to_download):
                         "    Unable to download a file of that size as the Confluence limit is {} bytes, skipping".format(
                             conf_max_attachment_size))
                     alert_items.append(
-                        "Had to skip downloading connections file '{}' of {} bytes on page '{}' as it exceeds {} bytes".format(
-                            conn_file_title, conn_file_size, page['title'], conf_max_attachment_size))
+                        "Had to skip downloading connections file '{}' of {} bytes on page '{}' as it exceeds {} bytes. URL: {}".format(
+                            conn_file_title, conn_file_size, page['title'], conf_max_attachment_size, conn_file_url))
             except Exception as e:
                 logger.info("Could not retrieve/upload Connections file. See log for more details")
                 alert_items.append(
@@ -1027,3 +1103,5 @@ if len(pages_to_download) > 0:
 </html>""".format(pages_rows)
 
         file.write(html_to_write)
+
+        logger.info("See tabular output of the work done here: {}".format(os.path.join(local_wiki_directory, 'results.html')))
