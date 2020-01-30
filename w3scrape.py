@@ -179,7 +179,7 @@ class WikiWorker:
 
     def get_next_feed_page(self, feed_json):
         next_feed_page = None
-        feed_link_type = feed_json['feed']['link']
+        feed_link_type = type(feed_json['feed']['link'])
         if feed_link_type is list:
             for link in feed_json['feed']['link']:
                 if link['@rel'] == 'next':
